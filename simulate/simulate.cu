@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <iostream>
+#include <fstream>
 #include <curand.h>
 #include <curand_kernel.h>
 
@@ -15,16 +17,18 @@
 #include "util.h"
 
 int main(int argc, char *argv[]) {
+    Timer timer;
+
     unsigned int size_x=200;
     unsigned int size_y=200;
     unsigned int size_z=200;
 
     unsigned int n=3*size_x*size_y*size_z;
-    unsigned int n_p = 7000000; //1 million points defined by 7 flos each
+    unsigned int n_p = 70000000; //1 million points defined by 7 flos each
 
     float *u, *p;
-//    curandState_t *states; 
-
+    printf("Begging Initializatoin...\n"); fflush(stdout);
+    startTime(&timer);
     cudaMalloc((void **) &u, n*sizeof(float));
     cudaMallocManaged(&p, n_p*sizeof(float));
 
@@ -69,23 +73,48 @@ int main(int argc, char *argv[]) {
     }
 
     initPoints(p, 1000000, size_x, size_y, size_z); 
+    stopTime(&timer); printf("Initialization finished: %f s\n", elapsedTime(timer)); fflush(stdout);
+    
+    std::ofstream fout;
+    fout.open("points.bin",std::ios::out | std::ios::app | std::ios::binary);
 
     for(unsigned int i=0;i<11/DELTA_T;i++) {
+	startTime(&timer);
         globalForce(u,grav_d,size_x,size_y,size_z);
 	cudaDeviceSynchronize();
 	if(i > 1/DELTA_T && i < 3/DELTA_T) {
             localForce(u,force_d,pos_d,0.25,size_x,size_y,size_z);
 	}
 	cudaDeviceSynchronize();
+	stopTime(&timer); float forceTime = elapsedTime(timer);
 	
+	startTime(&timer);
         advection(u,size_x,size_y,size_z);
+	stopTime(&timer); float advectionTime = elapsedTime(timer);
+	startTime(&timer);
         diffusion(u,size_x,size_y,size_z);
+        stopTime(&timer); float diffusionTime = elapsedTime(timer);
+	startTime(&timer);
 	project(u,size_x,size_y,size_z);
+        stopTime(&timer); float projectTime = elapsedTime(timer);
         cudaDeviceSynchronize();
+	startTime(&timer);
         updatePoints(u, p, 1000000, size_x, size_y, size_z);
+	stopTime(&timer); float updateTime = elapsedTime(timer);
+        cudaDeviceSynchronize();
+	for(unsigned int j=0;j<1000000;j++) {
+            fout << p[j*7+0] << p[j*7+1] << p[j*7+2];
+	}
 
-	printf("%.2f\n", i*DELTA_T); fflush(stdout);
+	printf("%.2f: %.6f\n", i*DELTA_T,forceTime+advectionTime+diffusionTime+projectTime+updateTime); fflush(stdout);
+	printf("\tforce:      %.6f\n", forceTime); fflush(stdout);
+	printf("\tadvection:  %.6f\n", advectionTime); fflush(stdout);
+	printf("\tdiffusion:  %.6f\n", diffusionTime); fflush(stdout);
+	printf("\tprojection: %.6f\n", projectTime); fflush(stdout);
+	printf("\tupdate:     %.6f\n", updateTime); fflush(stdout);
     }
+
+    fout.close();
 
     cudaFree(u);
     cudaFree(force_d);
